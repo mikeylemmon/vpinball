@@ -17,7 +17,7 @@ endif
 export DXSDK_DIR  = DXSDK
 export WSLENV    := $(WSLENV):DXSDK_DIR/w
 
-default: build
+default: build package
 
 clean:
 	rm -rf build/* || true

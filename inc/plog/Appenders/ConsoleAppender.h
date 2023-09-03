@@ -21,7 +21,8 @@ namespace plog
 #       pragma warning(suppress: 26812) //  Prefer 'enum class' over 'enum'
 #   endif
         ConsoleAppender(OutputStream outStream = streamStdOut)
-            : m_isatty(!!_isatty(_fileno(outStream == streamStdOut ? stdout : stderr)))
+            // : m_isatty(!!_isatty(_fileno(outStream == streamStdOut ? stdout : stderr)))
+            : m_isatty(false)
             , m_outputStream(outStream == streamStdOut ? std::cout : std::cerr)
             , m_outputHandle()
         {

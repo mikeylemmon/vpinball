@@ -17,7 +17,9 @@
 
 #include <locale>
 #include <codecvt>
+#include <iostream>
 
+#include "plog/Initializers/ConsoleInitializer.h"
 #include "plog/Initializers/RollingFileInitializer.h"
 
 #ifdef CRASH_HANDLER
@@ -476,6 +478,7 @@ public:
 
       SetupLogger();
       PLOGI << "Starting VPX...";
+      PLOGI << "INI file: " << szIniFileName;
 
       // Start VP with file dialog open and then also playing that one?
       const bool stos = LoadValueWithDefault(regKey[RegName::Editor], "SelectTableOnStart"s, true);
@@ -766,18 +769,25 @@ public:
 
 void SetupLogger()
 {
-   plog::Severity maxLogSeverity = plog::none;
-   if (LoadValueWithDefault(regKey[RegName::Editor], "EnableLog"s, false))
+   static plog::Severity maxLogSeverity = plog::none;
+
+   static bool initialized = false;
+   if (!initialized)
    {
-      static bool initialized = false;
-      if (!initialized)
+      initialized = true;
+      if (LoadValueWithDefault(regKey[RegName::Editor], "EnableLog"s, false))
       {
-         initialized = true;
          static plog::RollingFileAppender<plog::TxtFormatter> fileAppender("vpinball.log", 1024 * 1024 * 5, 1);
          static DebugAppender debugAppender;
          plog::Logger<PLOG_DEFAULT_INSTANCE_ID>::getInstance()->addAppender(&debugAppender);
          plog::Logger<PLOG_DEFAULT_INSTANCE_ID>::getInstance()->addAppender(&fileAppender);
          plog::Logger<PLOG_NO_DBG_OUT_INSTANCE_ID>::getInstance()->addAppender(&fileAppender);
+      }
+      if (LoadValueWithDefault(regKey[RegName::Editor], "EnableLogToConsole"s, false))
+      {
+         static plog::ConsoleAppender<plog::TxtFormatter> stdoutAppender;
+         plog::Logger<PLOG_DEFAULT_INSTANCE_ID>::getInstance()->addAppender(&stdoutAppender);
+         plog::Logger<PLOG_NO_DBG_OUT_INSTANCE_ID>::getInstance()->addAppender(&stdoutAppender);
       }
       #ifdef _DEBUG
       maxLogSeverity = plog::debug;
@@ -785,9 +795,98 @@ void SetupLogger()
       maxLogSeverity = plog::info;
       #endif
    }
+
    plog::Logger<PLOG_DEFAULT_INSTANCE_ID>::getInstance()->setMaxSeverity(maxLogSeverity);
    plog::Logger<PLOG_NO_DBG_OUT_INSTANCE_ID>::getInstance()->setMaxSeverity(maxLogSeverity);
 }
+
+
+// via https://stackoverflow.com/questions/191842/how-do-i-get-console-output-in-c-with-a-windows-program
+bool RedirectConsoleIO()
+{
+    bool result = true;
+    FILE* fp;
+
+    // Redirect STDIN if the console has an input handle
+    if (GetStdHandle(STD_INPUT_HANDLE) != INVALID_HANDLE_VALUE)
+        if (freopen_s(&fp, "CONIN$", "r", stdin) != 0)
+            result = false;
+        else
+            setvbuf(stdin, NULL, _IONBF, 0);
+
+    // Redirect STDOUT if the console has an output handle
+    if (GetStdHandle(STD_OUTPUT_HANDLE) != INVALID_HANDLE_VALUE)
+        if (freopen_s(&fp, "CONOUT$", "w", stdout) != 0)
+            result = false;
+        else
+            setvbuf(stdout, NULL, _IONBF, 0);
+
+    // Redirect STDERR if the console has an error handle
+    if (GetStdHandle(STD_ERROR_HANDLE) != INVALID_HANDLE_VALUE)
+        if (freopen_s(&fp, "CONOUT$", "w", stderr) != 0)
+            result = false;
+        else
+            setvbuf(stderr, NULL, _IONBF, 0);
+
+    // Make C++ standard streams point to console as well.
+    std::ios::sync_with_stdio(true);
+
+    // Clear the error state for each of the C++ standard streams.
+    std::wcout.clear();
+    std::cout.clear();
+    std::wcerr.clear();
+    std::cerr.clear();
+    std::wcin.clear();
+    std::cin.clear();
+
+    return result;
+}
+
+bool ReleaseConsole() {
+    // Just to be safe, redirect standard IO to NUL before releasing.
+    bool result = true;
+    FILE* fp;
+    // Redirect STDIN to NUL
+    if (freopen_s(&fp, "NUL:", "r", stdin) != 0)
+        result = false;
+    else
+        setvbuf(stdin, NULL, _IONBF, 0);
+    // Redirect STDOUT to NUL
+    if (freopen_s(&fp, "NUL:", "w", stdout) != 0)
+        result = false;
+    else
+        setvbuf(stdout, NULL, _IONBF, 0);
+    // Redirect STDERR to NUL
+    if (freopen_s(&fp, "NUL:", "w", stderr) != 0)
+        result = false;
+    else
+        setvbuf(stderr, NULL, _IONBF, 0);
+    // Detach from console
+    if (!FreeConsole())
+        result = false;
+    return result;
+}
+
+
+void AdjustConsoleBuffer() {
+    // Set the screen buffer to be big enough to scroll some text
+    CONSOLE_SCREEN_BUFFER_INFO conInfo;
+    GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &conInfo);
+	conInfo.dwSize.X = 80;
+    SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), conInfo.dwSize);
+}
+
+
+bool AttachParentConsole() {
+    bool result = false;
+    ReleaseConsole();
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        AdjustConsoleBuffer();
+        result = RedirectConsoleIO();
+    }
+    return result;
+}
+
 
 extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPTSTR /*lpCmdLine*/, int /*nShowCmd*/)
 {
@@ -817,6 +916,8 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, 
          #endif
       );
       #endif
+
+      AttachParentConsole();
 
       plog::init<PLOG_DEFAULT_INSTANCE_ID>();
       plog::init<PLOG_NO_DBG_OUT_INSTANCE_ID>(); // Logger that do not show in the debug window to avoid duplicated messages
@@ -849,5 +950,7 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, 
    #endif
 
    PLOGI << "Closing VPX...";
+   ReleaseConsole();
+
    return retval;
 }
